@@ -18,6 +18,13 @@ process.on('SIGTERM', shutdown);
 
 await app.listen({ port: config.PORT, host: config.HOST });
 
+if (config.isProd && config.OTP_PROVIDER === 'test') {
+  app.log.warn(
+    'TEST LOGIN IS ON (OTP_PROVIDER=test): no SMS is sent and the code for ANY phone number is shown in the app. ' +
+      'Set OTP_PROVIDER=msg91 with the MSG91 key and template id before real customers use the app.',
+  );
+}
+
 if (config.imageImport && config.publicUrl) {
   app.log.info({ dir: config.imagesDir, publicUrl: config.publicUrl }, 'copying outside images onto this server');
   startImageCopying(db, images, config.publicUrl, app.log);

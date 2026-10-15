@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
 
 import { buildApp } from '../src/app.js';
+import { config } from '../src/config.js';
 import { openDb, type DbHandle } from '../src/db/client.js';
 import { banners, brands, categories, coupons, homeSections, otpCodes, products, users } from '../src/db/schema.js';
 import { setSetting } from '../src/lib/settings.js';
@@ -171,6 +172,20 @@ describe('catalogue', () => {
 });
 
 describe('auth', () => {
+  it('test login (live server while the app is built) fills in the code like development, and says so', async () => {
+    const before = config.OTP_PROVIDER;
+    config.OTP_PROVIDER = 'test';
+    try {
+      expect((await call('GET', '/health')).body.login).toBe('test');
+      const req = await call('POST', '/v1/auth/otp/request', { phone: '9811122233' });
+      expect(req.status).toBe(200);
+      expect(req.body.devCode).toMatch(/^\d{6}$/);
+      expect((await call('POST', '/v1/auth/otp/verify', { phone: '9811122233', code: req.body.devCode })).status).toBe(200);
+    } finally {
+      config.OTP_PROVIDER = before;
+    }
+  });
+
   it('logs in with OTP and creates the account on first use', async () => {
     const s = await otpLogin('9876543210');
     expect(s.isNew).toBe(true);

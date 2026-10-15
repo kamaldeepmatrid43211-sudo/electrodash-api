@@ -53,8 +53,13 @@ export async function buildApp(db: Db, opts: FastifyServerOptions = {}, deps: Ap
     return reply.status(500).send({ error: { code: 'server_error', message: 'Something went wrong. Please try again.' } });
   });
 
-  // `images` says whether copies are kept on a lasting disk and outside images are being copied.
-  app.get('/health', async () => ({ ok: true, images: { persistent: config.imagesPersistent, copying: config.imageImport } }));
+  // `images`: whether copies are kept on a lasting disk and outside images are being copied.
+  // `login`: `sms` with a real SMS provider, `test` while codes are shown in the app instead.
+  app.get('/health', async () => ({
+    ok: true,
+    images: { persistent: config.imagesPersistent, copying: config.imageImport },
+    login: config.OTP_PROVIDER === 'msg91' ? 'sms' : 'test',
+  }));
 
   await imageRoutes(app, { store: deps.images ?? new ImageStore(config.imagesDir) });
   await catalogRoutes(app, { db });

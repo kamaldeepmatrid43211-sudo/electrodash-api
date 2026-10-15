@@ -17,10 +17,11 @@ const schema = z.object({
   ACCESS_TOKEN_TTL_MIN: z.coerce.number().int().default(30),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().default(60),
   /**
-   * OTP delivery. `console` prints the code in the server log and returns it
-   * to the app (development only). `msg91` sends a real SMS.
+   * OTP delivery. `console` prints the code in the server log and returns it to the app
+   * (development only). `test` does the same on the live server while the app is being built —
+   * no SMS, anyone can log in to any number, so never with real customers. `msg91` sends a real SMS.
    */
-  OTP_PROVIDER: z.enum(['console', 'msg91']).default('console'),
+  OTP_PROVIDER: z.enum(['console', 'test', 'msg91']).default('console'),
   MSG91_AUTH_KEY: z.string().optional(),
   MSG91_TEMPLATE_ID: z.string().optional(),
   CORS_ORIGINS: z.string().default('*'),

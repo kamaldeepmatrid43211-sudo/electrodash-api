@@ -1,0 +1,44 @@
+{
+  "name": "electrodash-server",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "vitest run",
+    "dev": "tsx watch src/index.ts",
+    "start": "node --import tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "seed:demo": "tsx src/seed/demo.ts",
+    "dev:advance": "tsx src/scripts/advance-order.ts",
+    "db:check": "tsx src/scripts/db-check.ts",
+    "categories:create": "tsx src/scripts/create-categories.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "private": "true",
+  "type": "module",
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.9",
+    "@fastify/cors": "^11.3.1",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^18.0.7",
+    "drizzle-orm": "^0.45.4",
+    "fastify": "^5.12.7",
+    "jose": "^6.2.12",
+    "pg": "^8.23.1",
+    "tsx": "^4.23.15",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "^0.31.11",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

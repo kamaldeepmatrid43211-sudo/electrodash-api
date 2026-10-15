@@ -1,0 +1,57 @@
+import { eq } from 'drizzle-orm';
+
+import type { Db } from '../db/client.js';
+import { settings } from '../db/schema.js';
+import type { FeeSettings } from './pricing.js';
+
+/**
+ * Business settings, editable by the admin without an app release. The
+ * delivery promise is data, not code: the app shows whatever is set here.
+ */
+export type StoreSettings = FeeSettings & {
+  /** e.g. "12 minutes". Empty string = don't show a time promise. */
+  deliveryEtaText: string;
+  storeAreaText: string;
+  /** Empty list = deliver to every PIN code. */
+  serviceablePincodes: string[];
+  supportPhone: string;
+  supportEmail: string;
+  supportHoursText: string;
+  codEnabled: boolean;
+  onlinePaymentsEnabled: boolean;
+};
+
+export const DEFAULT_SETTINGS: StoreSettings = {
+  deliveryFeePaise: 2500,
+  freeDeliveryMinPaise: 19900,
+  handlingFeePaise: 500,
+  codFeePaise: 1000,
+  deliveryEtaText: '',
+  storeAreaText: '',
+  serviceablePincodes: [],
+  supportPhone: '',
+  supportEmail: '',
+  supportHoursText: '',
+  codEnabled: true,
+  onlinePaymentsEnabled: false,
+};
+
+export async function getSettings(db: Db): Promise<StoreSettings> {
+  const rows = await db.select().from(settings);
+  const out: Record<string, unknown> = { ...DEFAULT_SETTINGS };
+  for (const r of rows) if (r.key in DEFAULT_SETTINGS) out[r.key] = r.value;
+  return out as StoreSettings;
+}
+
+export async function setSetting<K extends keyof StoreSettings>(db: Db, key: K, value: StoreSettings[K]) {
+  const existing = await db.select().from(settings).where(eq(settings.key, key));
+  if (existing.length) {
+    await db.update(settings).set({ value, updatedAt: new Date() }).where(eq(settings.key, key));
+  } else {
+    await db.insert(settings).values({ key, value });
+  }
+}
+
+export function isServiceable(s: StoreSettings, pincode: string): boolean {
+  return s.serviceablePincodes.length === 0 || s.serviceablePincodes.includes(pincode);
+}

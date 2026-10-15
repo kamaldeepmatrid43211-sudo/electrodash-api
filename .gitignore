@@ -1,0 +1,8 @@
+node_modules/
+.env
+.env.*
+!.env.example
+# local embedded database (development only)
+.data/
+dist/
+*.log

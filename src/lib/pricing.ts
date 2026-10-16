@@ -12,6 +12,8 @@ export type PricingProduct = {
   maxPerOrder: number;
   isActive: boolean;
   categoryId: number | null;
+  /** Every category the product is listed in (main and extra), when known. */
+  categoryIds?: number[];
 };
 
 export type PricingCoupon = {
@@ -96,7 +98,8 @@ export function evaluateCoupon(
     return { code, applied: false, reason: 'This coupon is only for your first order.' };
   }
   const eligible = lines
-    .filter((l) => coupon.categoryId == null || l.product.categoryId === coupon.categoryId)
+    // a category coupon covers every product listed in that category, not only its main one
+    .filter((l) => coupon.categoryId == null || l.product.categoryId === coupon.categoryId || !!l.product.categoryIds?.includes(coupon.categoryId))
     .reduce((s, l) => s + l.product.pricePaise * l.qty, 0);
   if (eligible === 0) {
     return { code, applied: false, reason: 'No items in your cart qualify for this coupon.' };

@@ -3,6 +3,7 @@ import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { brands, coupons, orders, products } from '../db/schema.js';
 import { productCard } from '../routes/catalog.js';
+import { categoriesOf } from './categories.js';
 import { quote, type PricingCoupon, type Quote } from './pricing.js';
 import { getSettings } from './settings.js';
 
@@ -52,10 +53,11 @@ export async function priceCart(
         .where(inArray(products.id, ids))
     : [];
   const byId = new Map(rows.map((r) => [r.p.id, r]));
-  const [settings, coupon, first] = await Promise.all([
+  const [settings, coupon, first, cats] = await Promise.all([
     getSettings(db),
     findCoupon(db, opts.couponCode),
     isFirstOrder(db, opts.userId),
+    categoriesOf(db, rows.map((r) => r.p)),
   ]);
 
   const priced = lines.map((l) => {
@@ -64,7 +66,7 @@ export async function priceCart(
     return {
       qty: l.qty,
       product: p
-        ? p
+        ? { ...p, categoryIds: cats.get(p.id) ?? [] }
         : // Deleted product: price 0, unavailable.
           { id: l.productId, name: 'Unavailable item', pricePaise: 0, mrpPaise: 0, stockQty: 0, maxPerOrder: 0, isActive: false, categoryId: null },
     };

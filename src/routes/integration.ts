@@ -7,6 +7,7 @@ import { z } from 'zod';
 import type { Db } from '../db/client.js';
 import { brands, categories, orderEvents, orderItems, orders, products, users, type Spec } from '../db/schema.js';
 import { HttpError, parse } from '../http.js';
+import { categoriesOf, inCategories, setProductCategories } from '../lib/categories.js';
 import { changeOrderStatus, NEXT_STATUS } from './orders.js';
 
 /**
@@ -158,6 +159,7 @@ function productOut(
   p: typeof products.$inferSelect,
   brandName: string | null,
   paths: Map<number, { id: number; name: string; path: string }>,
+  categoryIds: number[],
 ) {
   return {
     id: p.id,
@@ -168,6 +170,8 @@ function productOut(
     slug: p.slug,
     brand: brandName,
     category: p.categoryId ? (paths.get(p.categoryId) ?? null) : null,
+    /** every category the product is listed in, main first */
+    category_ids: categoryIds,
     price_paise: p.pricePaise,
     mrp_paise: p.mrpPaise,
     stock_qty: p.stockQty,
@@ -211,7 +215,7 @@ export async function integrationRoutes(app: FastifyInstance, { db, key }: { db:
           conds.push(or(ilike(products.name, like), ilike(products.sku, like))!);
         }
         if (q.active) conds.push(eq(products.isActive, q.active === '1'));
-        if (q.category_id) conds.push(eq(products.categoryId, q.category_id));
+        if (q.category_id) conds.push(inCategories(db, [q.category_id]));
         if (q.source) conds.push(eq(products.source, q.source));
         const where = conds.length ? and(...conds) : undefined;
         const [rows, [{ total }], paths] = await Promise.all([
@@ -226,7 +230,8 @@ export async function integrationRoutes(app: FastifyInstance, { db, key }: { db:
           db.select({ total: sql<number>`count(*)::int` }).from(products).where(where),
           categoryPaths(db),
         ]);
-        return { data: rows.map((r) => productOut(r.p, r.brandName, paths)), meta: meta(q.page, q.per_page, total) };
+        const cats = await categoriesOf(db, rows.map((r) => r.p));
+        return { data: rows.map((r) => productOut(r.p, r.brandName, paths, cats.get(r.p.id) ?? [])), meta: meta(q.page, q.per_page, total) };
       });
 
       scope.get('/products/skus', async () => {
@@ -240,6 +245,8 @@ export async function integrationRoutes(app: FastifyInstance, { db, key }: { db:
           z.object({
             product: wall2roofProduct,
             category_id: z.number().int().positive().nullish(),
+            /** every category, main first; replaces the product's set ([] clears it) */
+            category_ids: z.array(z.number().int().positive()).max(10).optional(),
             stock_qty: z.number().int().min(0).max(1_000_000).nullish(),
           }),
           req.body,
@@ -247,9 +254,13 @@ export async function integrationRoutes(app: FastifyInstance, { db, key }: { db:
         if (body.product.sku !== sku) {
           throw new HttpError(422, 'invalid_input', `product.sku (${body.product.sku}) doesn't match the URL (${sku}).`);
         }
-        if (body.category_id != null) {
-          const [cat] = await db.select({ id: categories.id }).from(categories).where(eq(categories.id, body.category_id));
-          if (!cat) throw new HttpError(422, 'invalid_input', `Category ${body.category_id} doesn't exist.`);
+        // category_ids sets all of them (first = main); category_id alone keeps its old meaning of
+        // "this one category"; with neither, the product keeps its categories.
+        const catIds = body.category_ids ? [...new Set(body.category_ids)] : body.category_id != null ? [body.category_id] : null;
+        if (catIds?.length) {
+          const found = new Set((await db.select({ id: categories.id }).from(categories).where(inArray(categories.id, catIds))).map((c) => c.id));
+          const missing = catIds.find((id) => !found.has(id));
+          if (missing != null) throw new HttpError(422, 'invalid_input', `Category ${missing} doesn't exist.`);
         }
         const m = mapWall2RoofProduct(body.product);
         const brandId = await brandIdFor(db, m.brandName);
@@ -265,35 +276,34 @@ export async function integrationRoutes(app: FastifyInstance, { db, key }: { db:
           isActive: m.isActive,
           source: 'laravel' as const,
           sourceId: String(body.product.id),
-          ...(body.category_id != null ? { categoryId: body.category_id } : {}),
           ...(body.stock_qty != null ? { stockQty: body.stock_qty } : {}),
           updatedAt: new Date(),
         };
 
-        if (existing) {
-          await db
-            .update(products)
-            .set({
-              ...common,
-              // No price from Wall2Roof → keep the last known price (the product is inactive anyway).
-              pricePaise: m.pricePaise ?? existing.pricePaise,
-              mrpPaise: m.mrpPaise ?? Math.max(existing.mrpPaise, existing.pricePaise),
-            })
-            .where(eq(products.id, existing.id));
-          return { ok: true, id: existing.id, created: false };
-        }
-
-        const [created] = await db
-          .insert(products)
-          .values({
-            ...common,
-            sku,
-            slug: await uniqueSlug(db, `${m.brandName ?? ''} ${m.name}`, sku),
-            pricePaise: m.pricePaise ?? 0,
-            mrpPaise: m.mrpPaise ?? 0,
-          })
-          .returning({ id: products.id });
-        return { ok: true, id: created.id, created: true };
+        const slug = existing ? null : await uniqueSlug(db, `${m.brandName ?? ''} ${m.name}`, sku);
+        return db.transaction(async (tx) => {
+          let id: number;
+          if (existing) {
+            await tx
+              .update(products)
+              .set({
+                ...common,
+                // No price from Wall2Roof → keep the last known price (the product is inactive anyway).
+                pricePaise: m.pricePaise ?? existing.pricePaise,
+                mrpPaise: m.mrpPaise ?? Math.max(existing.mrpPaise, existing.pricePaise),
+              })
+              .where(eq(products.id, existing.id));
+            id = existing.id;
+          } else {
+            const [created] = await tx
+              .insert(products)
+              .values({ ...common, sku, slug: slug!, pricePaise: m.pricePaise ?? 0, mrpPaise: m.mrpPaise ?? 0 })
+              .returning({ id: products.id });
+            id = created.id;
+          }
+          if (catIds) await setProductCategories(tx, id, catIds);
+          return { ok: true, id, created: !existing };
+        });
       });
 
       // ---- Categories ----

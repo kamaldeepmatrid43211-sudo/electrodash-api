@@ -152,6 +152,15 @@ describe('evaluateCoupon', () => {
       ctx,
     );
     expect(r).toMatchObject({ applied: true, discountPaise: 4500 }); // 15% of ₹300 only
+
+    // A product whose main category is 2 but which is also listed in category 1 qualifies too.
+    const alsoListed = [mixed[0], { product: product({ id: 2, pricePaise: 50000, categoryId: 2, categoryIds: [2, 1] }), qty: 1 }];
+    const r2 = evaluateCoupon(
+      coupon({ code: 'BULB15', value: 15, maxDiscountPaise: 20000, minOrderPaise: 29900, firstOrderOnly: false, categoryId: 1 }),
+      alsoListed,
+      ctx,
+    );
+    expect(r2).toMatchObject({ applied: true, discountPaise: 12000 }); // 15% of ₹800
   });
 
   it('never discounts more than the eligible amount for flat coupons', () => {

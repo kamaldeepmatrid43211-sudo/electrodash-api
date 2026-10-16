@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { Db } from '../db/client.js';
 import { cartItems, coupons, products } from '../db/schema.js';
 import { HttpError, parse, requireUser } from '../http.js';
+import { categoriesOf } from '../lib/categories.js';
 import { isFirstOrder, normalizeLines, priceCart } from '../lib/checkout.js';
 import { evaluateCoupon } from '../lib/pricing.js';
 
@@ -117,9 +118,10 @@ export async function cartRoutes(app: FastifyInstance, { db }: { db: Db }) {
       isFirstOrder(db, userId),
     ]);
     const byId = new Map(rows.map((p) => [p.id, p]));
+    const cats = await categoriesOf(db, rows);
     const cart = lines.flatMap((l) => {
       const p = byId.get(l.productId);
-      return p && p.isActive && p.stockQty > 0 ? [{ product: p, qty: l.qty }] : [];
+      return p && p.isActive && p.stockQty > 0 ? [{ product: { ...p, categoryIds: cats.get(p.id) ?? [] }, qty: l.qty }] : [];
     });
     return {
       coupons: list.map((c) => {

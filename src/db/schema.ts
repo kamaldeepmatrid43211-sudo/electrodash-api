@@ -105,6 +105,24 @@ export const products = pgTable(
   ],
 );
 
+/**
+ * Every category a product is listed in (several are allowed). products.category_id is the main
+ * one (breadcrumb, similar products) and is always in this set too; the shop also treats a
+ * product's category_id as a membership, in case a writer only sets that.
+ */
+export const productCategories = pgTable(
+  'product_categories',
+  {
+    productId: integer('product_id')
+      .notNull()
+      .references(() => products.id, { onDelete: 'cascade' }),
+    categoryId: integer('category_id')
+      .notNull()
+      .references(() => categories.id, { onDelete: 'cascade' }),
+  },
+  (t) => [primaryKey({ columns: [t.productId, t.categoryId] }), index('product_categories_category_idx').on(t.categoryId)],
+);
+
 export const users = pgTable(
   'users',
   {

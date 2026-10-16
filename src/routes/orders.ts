@@ -15,6 +15,7 @@ import {
   type AddressFields,
 } from '../db/schema.js';
 import { HttpError, parse, requireAdmin, requireUser } from '../http.js';
+import { categoriesOf } from '../lib/categories.js';
 import { findCoupon, isFirstOrder } from '../lib/checkout.js';
 import { quote } from '../lib/pricing.js';
 import { getSettings, isServiceable } from '../lib/settings.js';
@@ -166,9 +167,10 @@ export async function orderRoutes(app: FastifyInstance, { db }: { db: Db }) {
         )
         .for('update');
       const byId = new Map(rows.map((p) => [p.id, p]));
+      const cats = await categoriesOf(tx, rows);
       const lines = cart.flatMap((c) => {
         const p = byId.get(c.productId);
-        return p ? [{ product: p, qty: c.qty }] : [];
+        return p ? [{ product: { ...p, categoryIds: cats.get(p.id) ?? [] }, qty: c.qty }] : [];
       });
       const q = quote({
         lines,

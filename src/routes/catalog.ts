@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { Db } from '../db/client.js';
 import { banners, brands, categories, homeSections, products, type Spec } from '../db/schema.js';
 import { HttpError, parse } from '../http.js';
+import { categoryMembers, inCategories, subtreeCount } from '../lib/categories.js';
 import { facetAndFilter, isFiltering, parsePicked } from '../lib/filters.js';
 import { htmlToText } from '../lib/html.js';
 import { getSettings, isServiceable } from '../lib/settings.js';
@@ -98,21 +99,15 @@ async function homeSectionCards(db: Db) {
     .orderBy(asc(homeSections.sort), asc(homeSections.id));
   if (!rows.length) return [];
 
-  const [cats, counts] = await Promise.all([
+  const [cats, members] = await Promise.all([
     db
       .select({ id: categories.id, parentId: categories.parentId, slug: categories.slug, name: categories.name, imageUrl: categories.imageUrl, tint: categories.tint, isActive: categories.isActive })
       .from(categories),
-    db
-      .select({ categoryId: products.categoryId, n: sql<number>`count(*)::int` })
-      .from(products)
-      .where(eq(products.isActive, true))
-      .groupBy(products.categoryId),
+    categoryMembers(db),
   ]);
-  const direct = new Map(counts.map((c) => [c.categoryId, c.n]));
   const kids = new Map<number, number[]>();
   for (const c of cats) if (c.parentId != null) kids.set(c.parentId, [...(kids.get(c.parentId) ?? []), c.id]);
-  const total = (id: number, depth = 0): number =>
-    (direct.get(id) ?? 0) + (depth < 10 ? (kids.get(id) ?? []).reduce((sum, k) => sum + total(k, depth + 1), 0) : 0);
+  const total = (id: number) => subtreeCount(id, members, kids);
   const byId = new Map(cats.map((c) => [c.id, c]));
 
   return rows
@@ -194,31 +189,33 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
   });
 
   app.get('/v1/categories', async () => {
-    const rows = await db
-      .select({
-        id: categories.id,
-        slug: categories.slug,
-        name: categories.name,
-        parentId: categories.parentId,
-        imageUrl: categories.imageUrl,
-        tint: categories.tint,
-        sort: categories.sort,
-        // Fully qualified: an unqualified ${categories.id} renders as "id" and would bind to p.id.
-        productCount: sql<number>`(select count(*)::int from products p where p.category_id = categories.id and p.is_active)`,
-      })
-      .from(categories)
-      .where(eq(categories.isActive, true))
-      .orderBy(asc(categories.sort), asc(categories.name));
-    type Node = (typeof rows)[number] & { children: Node[]; totalCount: number };
-    const nodes = new Map<number, Node>(rows.map((r) => [r.id, { ...r, children: [], totalCount: r.productCount }]));
+    const [rows, members] = await Promise.all([
+      db
+        .select({
+          id: categories.id,
+          slug: categories.slug,
+          name: categories.name,
+          parentId: categories.parentId,
+          imageUrl: categories.imageUrl,
+          tint: categories.tint,
+          sort: categories.sort,
+        })
+        .from(categories)
+        .where(eq(categories.isActive, true))
+        .orderBy(asc(categories.sort), asc(categories.name)),
+      categoryMembers(db),
+    ]);
+    // A product listed in several categories counts in each, but once per parent.
+    type Node = (typeof rows)[number] & { productCount: number; children: Node[]; totalCount: number };
+    const nodes = new Map<number, Node>(rows.map((r) => [r.id, { ...r, productCount: members.get(r.id)?.size ?? 0, children: [], totalCount: 0 }]));
     const roots: Node[] = [];
     for (const n of nodes.values()) {
       const parent = n.parentId ? nodes.get(n.parentId) : undefined;
       if (parent) parent.children.push(n);
       else roots.push(n);
     }
-    const total = (n: Node): number => (n.totalCount = n.productCount + n.children.reduce((s, c) => s + total(c), 0));
-    roots.forEach(total);
+    const kids = new Map<number, number[]>([...nodes.values()].map((n) => [n.id, n.children.map((c) => c.id)]));
+    for (const n of nodes.values()) n.totalCount = subtreeCount(n.id, members, kids);
     // Only categories with at least one active product (in them or a sub-category)
     // are shown, so customers never open an empty category.
     const withProducts = (list: Node[]): Node[] =>
@@ -232,7 +229,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
     if (q.category) {
       const ids = await categoryIdsFor(db, q.category);
       if (!ids.length) return { items: [], total: 0, page: q.page, pages: 0, facets: { brands: [], prices: [], specs: [] } };
-      conds.push(inArray(products.categoryId, ids));
+      conds.push(inCategories(db, ids));
     }
     if (q.q) conds.push(searchCondition(q.q));
     if (q.minPrice != null) conds.push(gte(products.pricePaise, q.minPrice));

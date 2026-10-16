@@ -347,7 +347,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
   app.get('/v1/products/:slug', async (req) => {
     const { slug } = parse(z.object({ slug: z.string().min(1).max(200) }), req.params);
     const [row] = await db
-      .select({ p: products, brandName: brands.name, categorySlug: categories.slug, categoryName: categories.name })
+      .select({ p: products, brandName: brands.name, brandSlug: brands.slug, categorySlug: categories.slug, categoryName: categories.name })
       .from(products)
       .leftJoin(brands, eq(brands.id, products.brandId))
       .leftJoin(categories, eq(categories.id, products.categoryId))
@@ -383,6 +383,8 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
 
     return {
       ...productCard(p, row.brandName ? { name: row.brandName } : null),
+      /** for the brand page (`?brand=` on the product list) */
+      brandSlug: row.brandSlug,
       images: p.images,
       description: htmlToText(p.description),
       specs: p.specs,

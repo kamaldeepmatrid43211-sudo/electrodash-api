@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { Db } from '../db/client.js';
 import { banners, brands, categories, homeSections, products, type Spec } from '../db/schema.js';
 import { HttpError, parse } from '../http.js';
+import { facetAndFilter, isFiltering, parsePicked } from '../lib/filters.js';
 import { htmlToText } from '../lib/html.js';
 import { getSettings, isServiceable } from '../lib/settings.js';
 
@@ -130,6 +131,10 @@ async function homeSectionCards(db: Db) {
 const listQuery = z.object({
   category: z.string().optional(),
   brand: z.union([z.string(), z.array(z.string())]).optional(),
+  /** price bucket keys (see PRICE_BUCKETS) */
+  price: z.union([z.string(), z.array(z.string())]).optional(),
+  /** "group:value", repeated, e.g. spec=origin:India&spec=light:Warm White */
+  spec: z.union([z.string().max(120), z.array(z.string().max(120)).max(30)]).optional(),
   q: z.string().trim().max(100).optional(),
   minPrice: z.coerce.number().int().nonnegative().optional(),
   maxPrice: z.coerce.number().int().nonnegative().optional(),
@@ -226,16 +231,29 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
     const conds: SQL[] = [eq(products.isActive, true)];
     if (q.category) {
       const ids = await categoryIdsFor(db, q.category);
-      if (!ids.length) return { items: [], total: 0, page: q.page, pages: 0, facets: { brands: [] } };
+      if (!ids.length) return { items: [], total: 0, page: q.page, pages: 0, facets: { brands: [], prices: [], specs: [] } };
       conds.push(inArray(products.categoryId, ids));
     }
     if (q.q) conds.push(searchCondition(q.q));
     if (q.minPrice != null) conds.push(gte(products.pricePaise, q.minPrice));
     if (q.maxPrice != null) conds.push(lte(products.pricePaise, q.maxPrice));
     if (q.inStock) conds.push(sql`${products.stockQty} > 0`);
-    const facetConds = [...conds];
-    const brandSlugs = q.brand ? (Array.isArray(q.brand) ? q.brand : q.brand.split(',')) : [];
-    if (brandSlugs.length) conds.push(inArray(brands.slug, brandSlugs));
+
+    // Brand, price range and product-detail filters (and their counts) are worked out over
+    // everything the category/search allows; the page itself is then fetched by id.
+    const picked = parsePicked(q);
+    const pool = await db
+      .select({ id: products.id, pricePaise: products.pricePaise, specs: products.specs, brandSlug: brands.slug, brandName: brands.name })
+      .from(products)
+      .leftJoin(brands, eq(brands.id, products.brandId))
+      .where(and(...conds));
+    const { ids, facets } = facetAndFilter(pool, picked);
+    const filtering = isFiltering(picked);
+    const count = filtering ? ids.length : pool.length;
+    if (filtering) {
+      if (!ids.length) return { items: [], total: 0, page: q.page, pages: 0, facets };
+      conds.push(inArray(products.id, ids));
+    }
 
     const where = and(...conds);
     const order =
@@ -251,35 +269,21 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
                 ? [desc(products.createdAt)]
                 : [desc(sql`${products.stockQty} > 0`), desc(products.isBestseller), desc(products.ratingCount)];
 
-    const [rows, [{ count }], brandFacets] = await Promise.all([
-      db
-        .select({ p: products, brandName: brands.name })
-        .from(products)
-        .leftJoin(brands, eq(brands.id, products.brandId))
-        .where(where)
-        .orderBy(...order, asc(products.id))
-        .limit(q.limit)
-        .offset((q.page - 1) * q.limit),
-      db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(products)
-        .leftJoin(brands, eq(brands.id, products.brandId))
-        .where(where),
-      db
-        .select({ slug: brands.slug, name: brands.name, count: sql<number>`count(*)::int` })
-        .from(products)
-        .innerJoin(brands, eq(brands.id, products.brandId))
-        .where(and(...facetConds))
-        .groupBy(brands.slug, brands.name)
-        .orderBy(desc(sql`count(*)`)),
-    ]);
+    const rows = await db
+      .select({ p: products, brandName: brands.name })
+      .from(products)
+      .leftJoin(brands, eq(brands.id, products.brandId))
+      .where(where)
+      .orderBy(...order, asc(products.id))
+      .limit(q.limit)
+      .offset((q.page - 1) * q.limit);
 
     return {
       items: rows.map((r) => productCard(r.p, r.brandName ? { name: r.brandName } : null)),
       total: count,
       page: q.page,
       pages: Math.ceil(count / q.limit),
-      facets: { brands: brandFacets },
+      facets,
     };
   });
 

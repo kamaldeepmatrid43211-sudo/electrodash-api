@@ -262,13 +262,22 @@ describe('auth', () => {
     expect(r.status).toBe(400);
   });
 
-  it('rotates refresh tokens and revokes on logout', async () => {
+  it('keeps the customer logged in when a refresh reply is lost, and only logout ends it', async () => {
     const s = await otpLogin('9988776655');
-    const r1 = await call('POST', '/v1/auth/refresh', { refreshToken: s.refreshToken });
+    const refresh = (token: string) => call('POST', '/v1/auth/refresh', { refreshToken: token });
+
+    const lost = await refresh(s.refreshToken); // this reply "never reaches the phone"
+    expect(lost.status).toBe(200);
+    const r1 = await refresh(s.refreshToken); // the phone tries again with the token it still has
     expect(r1.status).toBe(200);
-    expect((await call('POST', '/v1/auth/refresh', { refreshToken: s.refreshToken })).status).toBe(401); // old one is spent
-    await call('POST', '/v1/auth/logout', { refreshToken: r1.body.refreshToken });
-    expect((await call('POST', '/v1/auth/refresh', { refreshToken: r1.body.refreshToken })).status).toBe(401);
+    expect((await refresh(lost.body.refreshToken)).status).toBe(401); // the unused one was retired
+
+    const r2 = await refresh(r1.body.refreshToken); // the phone uses its new token…
+    expect(r2.status).toBe(200);
+    expect((await refresh(s.refreshToken)).status).toBe(401); // …so the first one is finished
+
+    await call('POST', '/v1/auth/logout', { refreshToken: r2.body.refreshToken });
+    expect((await refresh(r2.body.refreshToken)).status).toBe(401);
   });
 
   it('requires login for account routes', async () => {

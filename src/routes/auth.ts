@@ -39,14 +39,17 @@ export function publicUser(u: typeof users.$inferSelect) {
   };
 }
 
-async function issueTokens(db: Db, u: typeof users.$inferSelect) {
+async function createSession(db: Db, u: typeof users.$inferSelect) {
   const { token, hash } = newRefreshToken();
-  await db.insert(refreshTokens).values({
-    userId: u.id,
-    tokenHash: hash,
-    expiresAt: new Date(Date.now() + config.REFRESH_TOKEN_TTL_DAYS * 86_400_000),
-  });
-  return { accessToken: await signAccessToken(u.id, u.role), refreshToken: token, user: publicUser(u) };
+  const [row] = await db
+    .insert(refreshTokens)
+    .values({ userId: u.id, tokenHash: hash, expiresAt: new Date(Date.now() + config.REFRESH_TOKEN_TTL_DAYS * 86_400_000) })
+    .returning({ id: refreshTokens.id });
+  return { refreshId: row.id, session: { accessToken: await signAccessToken(u.id, u.role), refreshToken: token, user: publicUser(u) } };
+}
+
+async function issueTokens(db: Db, u: typeof users.$inferSelect) {
+  return (await createSession(db, u)).session;
 }
 
 const phoneBody = z.object({ phone: z.string().min(10).max(16) });
@@ -152,10 +155,22 @@ export async function authRoutes(app: FastifyInstance, { db }: { db: Db }) {
         ),
       );
     if (!row) throw new HttpError(401, 'session_expired', 'Your session has expired. Please log in again.');
-    await db.update(refreshTokens).set({ revokedAt: new Date() }).where(eq(refreshTokens.id, row.id));
     const [user] = await db.select().from(users).where(eq(users.id, row.userId));
     if (!user) throw new HttpError(401, 'session_expired', 'Your session has expired. Please log in again.');
-    return issueTokens(db, user);
+
+    // Customers stay logged in until they log out. A token stays usable until the phone has used
+    // the one it was swapped for, so a refresh whose reply got lost (weak signal, app closed at
+    // that moment) just gets a fresh token instead of logging the customer out.
+    const now = new Date();
+    // Using this token proves the phone has it, so the token it replaced is finished.
+    await db.update(refreshTokens).set({ revokedAt: now }).where(and(eq(refreshTokens.replacedById, row.id), isNull(refreshTokens.revokedAt)));
+    // Swapped before but the phone never used the new one: retire that unused one.
+    if (row.replacedById) {
+      await db.update(refreshTokens).set({ revokedAt: now }).where(and(eq(refreshTokens.id, row.replacedById), isNull(refreshTokens.revokedAt)));
+    }
+    const { refreshId, session } = await createSession(db, user);
+    await db.update(refreshTokens).set({ replacedById: refreshId }).where(eq(refreshTokens.id, row.id));
+    return session;
   });
 
   app.post('/v1/auth/logout', async (req) => {

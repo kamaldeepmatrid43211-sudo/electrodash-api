@@ -139,6 +139,11 @@ export const refreshTokens = pgTable('refresh_tokens', {
   tokenHash: text('token_hash').notNull(),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  /**
+   * The token handed out in exchange for this one. This one stays usable until that successor
+   * is used, so a refresh whose reply never reached the phone doesn't log the customer out.
+   */
+  replacedById: integer('replaced_by_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

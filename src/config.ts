@@ -15,7 +15,8 @@ const schema = z.object({
   /** Secret for signing access tokens. Required in production. */
   JWT_SECRET: z.string().min(32).optional(),
   ACCESS_TOKEN_TTL_MIN: z.coerce.number().int().default(30),
-  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().default(60),
+  /** How long a login lasts without opening the app; every use starts the count again. */
+  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().default(365),
   /**
    * OTP delivery. `console` prints the code in the server log and returns it to the app
    * (development only). `test` does the same on the live server while the app is being built —

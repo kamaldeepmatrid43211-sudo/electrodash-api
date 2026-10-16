@@ -108,6 +108,23 @@ describe('catalogue', () => {
     expect((await call('GET', '/v1/serviceability?pincode=12')).status).toBe(400);
   });
 
+  it('picks home bestsellers in a random order, only from in-stock bestsellers', async () => {
+    const [cat] = await h.db.insert(categories).values({ slug: 'best-pool', name: 'Pool' }).returning();
+    await h.db.insert(products).values(
+      Array.from({ length: 20 }, (_, i) => ({
+        sku: `BP${i}`, slug: `best-${i}`, name: `Bestseller ${i}`, categoryId: cat.id, pricePaise: 1000, mrpPaise: 1000, stockQty: 5, isBestseller: true,
+      })),
+    );
+    const orders = new Set<string>();
+    for (let i = 0; i < 6; i++) {
+      const best = (await call('GET', '/v1/home')).body.bestsellers as { sku: string; inStock: boolean }[];
+      expect(best.length).toBe(12);
+      expect(best.every((p) => p.inStock)).toBe(true);
+      orders.add(best.map((p) => p.sku).join(','));
+    }
+    expect(orders.size).toBeGreaterThan(1); // 6 loads of 12 out of 21 can't all come out the same
+  });
+
   it('exposes delivery settings as data', async () => {
     await setSetting(h.db, 'deliveryEtaText', '12 minutes');
     expect((await call('GET', '/v1/config')).body.deliveryEtaText).toBe('12 minutes');

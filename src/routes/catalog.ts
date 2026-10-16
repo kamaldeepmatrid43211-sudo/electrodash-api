@@ -312,7 +312,8 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
         .from(products)
         .leftJoin(brands, eq(brands.id, products.brandId))
         .where(and(eq(products.isActive, true), eq(products.isBestseller, true), sql`${products.stockQty} > 0`))
-        .orderBy(desc(products.ratingCount))
+        // a fresh random pick every time Home loads, so shoppers see different bestsellers
+        .orderBy(sql`random()`)
         .limit(12),
       db
         .select()

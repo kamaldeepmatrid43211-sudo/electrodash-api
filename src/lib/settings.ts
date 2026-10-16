@@ -19,6 +19,11 @@ export type StoreSettings = FeeSettings & {
   supportHoursText: string;
   codEnabled: boolean;
   onlinePaymentsEnabled: boolean;
+  /**
+   * Test login while the app is being built and no SMS provider is bought yet: no SMS is sent
+   * and the code for ANY number is filled in by the app. Never with real customers.
+   */
+  testLogin: boolean;
 };
 
 export const DEFAULT_SETTINGS: StoreSettings = {
@@ -34,6 +39,7 @@ export const DEFAULT_SETTINGS: StoreSettings = {
   supportHoursText: '',
   codEnabled: true,
   onlinePaymentsEnabled: false,
+  testLogin: false,
 };
 
 export async function getSettings(db: Db): Promise<StoreSettings> {

@@ -20,6 +20,7 @@ import {
 } from '../lib/auth.js';
 import { config } from '../config.js';
 import { sendOtp } from '../lib/otp-sender.js';
+import { getSettings } from '../lib/settings.js';
 
 const OTP_TTL_MS = 5 * 60_000;
 const OTP_RESEND_SEC = 30;
@@ -74,7 +75,7 @@ export async function authRoutes(app: FastifyInstance, { db }: { db: Db }) {
     }
     const code = newOtp();
     await db.insert(otpCodes).values({ phone, codeHash: hashOtp(phone, code), expiresAt: new Date(Date.now() + OTP_TTL_MS) });
-    const delivery = await sendOtp(phone, code, req.log);
+    const delivery = await sendOtp(phone, code, req.log, (await getSettings(db)).testLogin);
     return { sent: true, resendInSec: OTP_RESEND_SEC, ...(delivery.devCode ? { devCode: delivery.devCode } : {}) };
   });
 

@@ -5,6 +5,8 @@ import { config } from './config.js';
 import type { Db } from './db/client.js';
 import { HttpError, readAuth, sendError } from './http.js';
 import { ImageStore } from './lib/images.js';
+import { isTestLogin } from './lib/otp-sender.js';
+import { getSettings } from './lib/settings.js';
 import { accountRoutes } from './routes/account.js';
 import { authRoutes } from './routes/auth.js';
 import { cartRoutes } from './routes/cart.js';
@@ -55,11 +57,14 @@ export async function buildApp(db: Db, opts: FastifyServerOptions = {}, deps: Ap
 
   // `images`: whether copies are kept on a lasting disk and outside images are being copied.
   // `login`: `sms` with a real SMS provider, `test` while codes are shown in the app instead.
-  app.get('/health', async () => ({
-    ok: true,
-    images: { persistent: config.imagesPersistent, copying: config.imageImport },
-    login: config.OTP_PROVIDER === 'msg91' ? 'sms' : 'test',
-  }));
+  app.get('/health', async () => {
+    const testLogin = await getSettings(db).then((s) => s.testLogin, () => false);
+    return {
+      ok: true,
+      images: { persistent: config.imagesPersistent, copying: config.imageImport },
+      login: isTestLogin(testLogin) ? 'test' : 'sms',
+    };
+  });
 
   await imageRoutes(app, { store: deps.images ?? new ImageStore(config.imagesDir) });
   await catalogRoutes(app, { db });

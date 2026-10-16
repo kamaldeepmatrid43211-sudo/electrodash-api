@@ -2,13 +2,18 @@ import { config } from '../config.js';
 
 export type OtpDelivery = { sent: true; devCode?: string };
 
+/** Whether codes are shown in the app instead of sent by SMS: OTP_PROVIDER console/test, or the testLogin setting. */
+export function isTestLogin(testLoginSetting: boolean): boolean {
+  return config.OTP_PROVIDER !== 'msg91' || testLoginSetting;
+}
+
 /**
- * Sends the OTP. With `console` (development) and `test` (live server while the app is being
- * built) no SMS is sent: the code is logged and returned to the app, which fills it in.
+ * Sends the OTP. In test login (see isTestLogin) no SMS is sent: the code is logged and
+ * returned to the app, which fills it in.
  */
-export async function sendOtp(phone: string, code: string, log: { info: (msg: string) => void }): Promise<OtpDelivery> {
-  if (config.OTP_PROVIDER === 'console' || config.OTP_PROVIDER === 'test') {
-    log.info(`[${config.OTP_PROVIDER} OTP] ${phone} → ${code}`);
+export async function sendOtp(phone: string, code: string, log: { info: (msg: string) => void }, testLoginSetting = false): Promise<OtpDelivery> {
+  if (isTestLogin(testLoginSetting)) {
+    log.info(`[test OTP] ${phone} → ${code}`);
     return { sent: true, devCode: code };
   }
   if (!config.MSG91_AUTH_KEY || !config.MSG91_TEMPLATE_ID) {

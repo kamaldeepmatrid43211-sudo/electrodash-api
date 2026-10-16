@@ -203,6 +203,27 @@ describe('auth', () => {
     }
   });
 
+  it('the testLogin setting turns on test login even with a real SMS provider configured', async () => {
+    const before = config.OTP_PROVIDER;
+    config.OTP_PROVIDER = 'msg91'; // no MSG91 key in tests, so a real send would fail
+    try {
+      await setSetting(h.db, 'testLogin', true);
+      expect((await call('GET', '/health')).body.login).toBe('test');
+      const req = await call('POST', '/v1/auth/otp/request', { phone: '9811100011' });
+      expect(req.status).toBe(200);
+      expect(req.body.devCode).toMatch(/^\d{6}$/);
+
+      await setSetting(h.db, 'testLogin', false);
+      expect((await call('GET', '/health')).body.login).toBe('sms');
+      const real = await call('POST', '/v1/auth/otp/request', { phone: '9811100022' });
+      expect(real.status).toBe(500); // tries MSG91, which isn't set up here
+      expect(real.body.devCode).toBeUndefined();
+    } finally {
+      config.OTP_PROVIDER = before;
+      await setSetting(h.db, 'testLogin', false);
+    }
+  });
+
   it('logs in with OTP and creates the account on first use', async () => {
     const s = await otpLogin('9876543210');
     expect(s.isNew).toBe(true);

@@ -69,6 +69,13 @@ async function detail(db: Db, o: OrderRow) {
     db.select().from(returnRequests).where(eq(returnRequests.orderId, o.id)),
   ]);
   const deliveredAt = events.find((e) => e.status === 'delivered')?.createdAt ?? null;
+  // the product's pack size ("2 ltr", "Pack of 2") for "2 ltr x 1" on the order page
+  const productIds = items.flatMap((i) => (i.productId == null ? [] : [i.productId]));
+  const units = productIds.length
+    ? new Map(
+        (await db.select({ id: products.id, label: products.variantLabel }).from(products).where(inArray(products.id, productIds))).map((p) => [p.id, p.label]),
+      )
+    : new Map<number, string | null>();
   return {
     ...summary(o, items, deliveredAt),
     address: o.address,
@@ -81,6 +88,7 @@ async function detail(db: Db, o: OrderRow) {
         sku: i.sku,
         name: i.name,
         image: i.image,
+        unitLabel: (i.productId != null ? units.get(i.productId) : null) ?? null,
         qty: i.qty,
         unitPricePaise: i.unitPricePaise,
         unitMrpPaise: i.unitMrpPaise,

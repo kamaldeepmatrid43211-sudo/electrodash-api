@@ -447,10 +447,11 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
     ]);
 
     // "Similar products": the nearest in price; "Top products in this category": the most popular of the rest.
+    // Six each: two rows of three, like Blinkit's.
     const gap = (r: CardRow) => Math.abs(r.p.pricePaise - p.pricePaise);
-    const similar = [...sameCategory].sort((a, b) => gap(a) - gap(b) || byPopularity(a, b)).slice(0, 9);
+    const similar = [...sameCategory].sort((a, b) => gap(a) - gap(b) || byPopularity(a, b)).slice(0, 6);
     const shown = new Set(similar.map((r) => r.p.id));
-    const top = sameCategory.filter((r) => !shown.has(r.p.id)).sort(byPopularity).slice(0, 9);
+    const top = sameCategory.filter((r) => !shown.has(r.p.id)).sort(byPopularity).slice(0, 6);
 
     // "Brands in this category", most products first (this product's brand counts too)
     const brandCount = new Map<string, { slug: string; name: string; logoUrl: string | null; count: number }>();
@@ -481,7 +482,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
         inStock: v.stockQty > 0,
         selected: v.id === p.id,
       })),
-      /** "Similar products": same category, nearest in price */
+      /** "Similar products": same category, the 6 nearest in price */
       related: similar.map(card),
       /** "Top products in this category": the most popular of the category's other products */
       topInCategory: top.map(card),

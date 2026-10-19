@@ -94,10 +94,10 @@ afterAll(async () => {
 describe('product page sections', () => {
   it('splits the category into Similar (nearest price) and Top (most popular of the rest)', async () => {
     const d = await detail('w0');
-    // the 9 nearest in price to W0 (₹100): W1..W9
-    expect(skus(d.related)).toEqual(['W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9']);
+    // the 6 nearest in price to W0 (₹100): W1..W6 — two rows of three, like Blinkit
+    expect(skus(d.related)).toEqual(['W1', 'W2', 'W3', 'W4', 'W5', 'W6']);
     // the rest, bestseller first
-    expect(skus(d.topInCategory)).toEqual(['W11', 'W10']);
+    expect(skus(d.topInCategory)).toEqual(['W11', 'W7', 'W8', 'W9', 'W10']);
     expect(d.related.concat(d.topInCategory).some((p: any) => p.sku === 'W0')).toBe(false);
   });
 

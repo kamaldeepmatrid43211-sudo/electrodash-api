@@ -39,7 +39,7 @@ export function orderNumber(id: number, at = new Date()): string {
   return `ED-${at.getFullYear()}-${String(10000 + id)}`;
 }
 
-function summary(o: OrderRow, items: (typeof orderItems.$inferSelect)[]) {
+function summary(o: OrderRow, items: (typeof orderItems.$inferSelect)[], deliveredAt: Date | null) {
   return {
     number: o.number,
     status: o.status,
@@ -48,7 +48,10 @@ function summary(o: OrderRow, items: (typeof orderItems.$inferSelect)[]) {
     paymentMethod: o.paymentMethod,
     paymentStatus: o.paymentStatus,
     itemCount: items.reduce((n, i) => n + i.qty, 0),
-    preview: items.slice(0, 3).map((i) => ({ name: i.name, image: i.image, qty: i.qty })),
+    /** first few items, for the photo row on order cards (and searching them) */
+    preview: items.slice(0, 6).map((i) => ({ name: i.name, image: i.image, qty: i.qty })),
+    /** when it was delivered, for Blinkit's 'Arrived in 1 hr 20 mins' */
+    deliveredAt: deliveredAt?.toISOString() ?? null,
   };
 }
 
@@ -67,7 +70,7 @@ async function detail(db: Db, o: OrderRow) {
   ]);
   const deliveredAt = events.find((e) => e.status === 'delivered')?.createdAt ?? null;
   return {
-    ...summary(o, items),
+    ...summary(o, items, deliveredAt),
     address: o.address,
     deliveryInstructions: o.deliveryInstructions,
     items: items.map((i) => {
@@ -293,7 +296,14 @@ export async function orderRoutes(app: FastifyInstance, { db }: { db: Db }) {
             ),
           )
       : [];
-    return { orders: list.map((o) => summary(o, items.filter((i) => i.orderId === o.id))) };
+    const delivered = list.some((o) => o.status === 'delivered')
+      ? await db
+          .select({ orderId: orderEvents.orderId, at: orderEvents.createdAt })
+          .from(orderEvents)
+          .where(and(inArray(orderEvents.orderId, list.map((o) => o.id)), eq(orderEvents.status, 'delivered')))
+      : [];
+    const deliveredAt = new Map(delivered.map((e) => [e.orderId, e.at]));
+    return { orders: list.map((o) => summary(o, items.filter((i) => i.orderId === o.id), deliveredAt.get(o.id) ?? null)) };
   });
 
   app.get('/v1/orders/:number', async (req) => {

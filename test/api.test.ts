@@ -416,6 +416,14 @@ describe('order lifecycle', () => {
     expect(d.body.paymentStatus).toBe('paid');
     expect(d.body.canCancel).toBe(false);
     expect(d.body.items[0].canReturn).toBe(true);
+    expect(d.body.deliveredAt).toEqual(expect.any(String));
+
+    // the list says when each order was delivered (for "Arrived in …"); undelivered ones say null
+    const list = (await call('GET', '/v1/orders', undefined, token)).body.orders;
+    const mine = list.find((x: any) => x.number === n);
+    expect(mine.deliveredAt).toBe(d.body.deliveredAt);
+    expect(new Date(mine.deliveredAt).getTime()).toBeGreaterThanOrEqual(new Date(mine.placedAt).getTime());
+    expect(list.filter((x: any) => x.status !== 'delivered').every((x: any) => x.deliveredAt === null)).toBe(true);
 
     const ret = await call(
       'POST',

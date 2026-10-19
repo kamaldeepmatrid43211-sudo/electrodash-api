@@ -168,6 +168,16 @@ function searchCondition(q: string): SQL {
 type CardRow = { p: typeof products.$inferSelect; brandName: string | null };
 const card = (r: CardRow) => productCard(r.p, r.brandName ? { name: r.brandName } : null);
 
+/** A shuffled copy (Fisher–Yates), for sections that show a different pick on every visit. */
+function shuffled<T>(list: T[]): T[] {
+  const a = [...list];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 /** Popular first: in stock, bestsellers, best rated, most rated. */
 function byPopularity(a: CardRow, b: CardRow) {
   const inStock = (r: CardRow) => (r.p.stockQty > 0 ? 1 : 0);
@@ -182,7 +192,7 @@ function byPopularity(a: CardRow, b: CardRow) {
 
 /**
  * Blinkit's "People also bought": products bought in the same orders as this one, most often first,
- * topped up with bestsellers from other categories while there's little order history.
+ * topped up with a random pick of bestsellers from other categories (different on every visit).
  */
 async function alsoBought(db: Db, p: typeof products.$inferSelect, limit: number): Promise<CardRow[]> {
   const together = await db
@@ -224,7 +234,7 @@ async function alsoBought(db: Db, p: typeof products.$inferSelect, limit: number
         p.categoryId ? or(sql`${products.categoryId} is null`, ne(products.categoryId, p.categoryId)) : undefined,
       ),
     )
-    .orderBy(desc(sql`${products.stockQty} > 0`), desc(products.isBestseller), desc(products.ratingCount), asc(products.id))
+    .orderBy(desc(sql`${products.stockQty} > 0`), desc(products.isBestseller), sql`random()`)
     .limit(limit - bought.length);
   return [...bought, ...fill];
 }
@@ -446,12 +456,12 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
       alsoBought(db, p, 6),
     ]);
 
-    // "Similar products": the nearest in price; "Top products in this category": the most popular of the rest.
-    // Six each: two rows of three, like Blinkit's.
-    const gap = (r: CardRow) => Math.abs(r.p.pricePaise - p.pricePaise);
-    const similar = [...sameCategory].sort((a, b) => gap(a) - gap(b) || byPopularity(a, b)).slice(0, 6);
-    const shown = new Set(similar.map((r) => r.p.id));
-    const top = sameCategory.filter((r) => !shown.has(r.p.id)).sort(byPopularity).slice(0, 6);
+    // A fresh pick on every visit (like Home's bestsellers), six each: two rows of three, like Blinkit's.
+    // "Similar products": any 6 from the category; "Top products in this category": 6 of the rest, most
+    // popular first.
+    const mixed = shuffled(sameCategory);
+    const similar = mixed.slice(0, 6);
+    const top = mixed.slice(6, 12).sort(byPopularity);
 
     // "Brands in this category", most products first (this product's brand counts too)
     const brandCount = new Map<string, { slug: string; name: string; logoUrl: string | null; count: number }>();
@@ -482,9 +492,9 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
         inStock: v.stockQty > 0,
         selected: v.id === p.id,
       })),
-      /** "Similar products": same category, the 6 nearest in price */
+      /** "Similar products": 6 from the same category, a different pick each visit */
       related: similar.map(card),
-      /** "Top products in this category": the most popular of the category's other products */
+      /** "Top products in this category": 6 more from the category, most popular first */
       topInCategory: top.map(card),
       /** "People also bought" */
       alsoBought: bought.map(card),

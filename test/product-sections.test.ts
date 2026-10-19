@@ -92,13 +92,23 @@ afterAll(async () => {
 });
 
 describe('product page sections', () => {
-  it('splits the category into Similar (nearest price) and Top (most popular of the rest)', async () => {
-    const d = await detail('w0');
-    // the 6 nearest in price to W0 (₹100): W1..W6 — two rows of three, like Blinkit
-    expect(skus(d.related)).toEqual(['W1', 'W2', 'W3', 'W4', 'W5', 'W6']);
-    // the rest, bestseller first
-    expect(skus(d.topInCategory)).toEqual(['W11', 'W7', 'W8', 'W9', 'W10']);
-    expect(d.related.concat(d.topInCategory).some((p: any) => p.sku === 'W0')).toBe(false);
+  it('picks 6 Similar and up to 6 Top products from the category, freshly each visit', async () => {
+    const category = ['W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11'];
+    const picks = new Set<string>();
+    for (let i = 0; i < 8; i++) {
+      const d = await detail('w0');
+      const similar = skus(d.related);
+      const top = skus(d.topInCategory);
+      // two rows of three, like Blinkit; the 11 others split 6 + 5, never repeating or showing W0 itself
+      expect(similar).toHaveLength(6);
+      expect(top).toHaveLength(5);
+      expect([...similar, ...top].sort()).toEqual([...category].sort());
+      // Top is shown most popular first: the bestseller leads whenever it's in there
+      if (top.includes('W11')) expect(top[0]).toBe('W11');
+      picks.add(similar.join(','));
+    }
+    // a different pick on (almost) every visit
+    expect(picks.size).toBeGreaterThan(1);
   });
 
   it('lists the brands in the category, most products first, with their logos', async () => {

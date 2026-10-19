@@ -1,9 +1,9 @@
-import { and, asc, desc, eq, gte, ilike, inArray, lte, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, lte, ne, notInArray, or, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import type { Db } from '../db/client.js';
-import { banners, brands, categories, homeSections, products, type Spec } from '../db/schema.js';
+import { banners, brands, categories, homeSections, orderItems, products, type Spec } from '../db/schema.js';
 import { HttpError, parse } from '../http.js';
 import { categoryMembers, inCategories, subtreeCount } from '../lib/categories.js';
 import { facetAndFilter, isFiltering, parsePicked } from '../lib/filters.js';
@@ -163,6 +163,70 @@ function searchCondition(q: string): SQL {
       )!;
     }),
   )!;
+}
+
+type CardRow = { p: typeof products.$inferSelect; brandName: string | null };
+const card = (r: CardRow) => productCard(r.p, r.brandName ? { name: r.brandName } : null);
+
+/** Popular first: in stock, bestsellers, best rated, most rated. */
+function byPopularity(a: CardRow, b: CardRow) {
+  const inStock = (r: CardRow) => (r.p.stockQty > 0 ? 1 : 0);
+  return (
+    inStock(b) - inStock(a) ||
+    Number(b.p.isBestseller) - Number(a.p.isBestseller) ||
+    (b.p.ratingAvg ?? 0) - (a.p.ratingAvg ?? 0) ||
+    b.p.ratingCount - a.p.ratingCount ||
+    a.p.id - b.p.id
+  );
+}
+
+/**
+ * Blinkit's "People also bought": products bought in the same orders as this one, most often first,
+ * topped up with bestsellers from other categories while there's little order history.
+ */
+async function alsoBought(db: Db, p: typeof products.$inferSelect, limit: number): Promise<CardRow[]> {
+  const together = await db
+    .select({ id: orderItems.productId, n: sql<number>`count(*)::int` })
+    .from(orderItems)
+    .where(
+      and(
+        inArray(orderItems.orderId, db.select({ id: orderItems.orderId }).from(orderItems).where(eq(orderItems.productId, p.id))),
+        isNotNull(orderItems.productId),
+        ne(orderItems.productId, p.id),
+      ),
+    )
+    .groupBy(orderItems.productId)
+    .orderBy(desc(sql`count(*)`))
+    .limit(limit * 2);
+  const ids = together.flatMap((t) => (t.id == null ? [] : [t.id]));
+  const rank = new Map(ids.map((id, i) => [id, i]));
+  const bought = ids.length
+    ? (
+        await db
+          .select({ p: products, brandName: brands.name })
+          .from(products)
+          .leftJoin(brands, eq(brands.id, products.brandId))
+          .where(and(inArray(products.id, ids), eq(products.isActive, true)))
+      )
+        .sort((a, b) => rank.get(a.p.id)! - rank.get(b.p.id)!)
+        .slice(0, limit)
+    : [];
+  if (bought.length >= limit) return bought;
+  const skip = [p.id, ...bought.map((b) => b.p.id)];
+  const fill = await db
+    .select({ p: products, brandName: brands.name })
+    .from(products)
+    .leftJoin(brands, eq(brands.id, products.brandId))
+    .where(
+      and(
+        eq(products.isActive, true),
+        notInArray(products.id, skip),
+        p.categoryId ? or(sql`${products.categoryId} is null`, ne(products.categoryId, p.categoryId)) : undefined,
+      ),
+    )
+    .orderBy(desc(sql`${products.stockQty} > 0`), desc(products.isBestseller), desc(products.ratingCount), asc(products.id))
+    .limit(limit - bought.length);
+  return [...bought, ...fill];
 }
 
 export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
@@ -355,7 +419,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
     if (!row) throw new HttpError(404, 'not_found', 'This product is no longer available.');
     const p = row.p;
 
-    const [variants, related] = await Promise.all([
+    const [variants, sameCategory, bought] = await Promise.all([
       p.variantGroup
         ? db
             .select()
@@ -363,23 +427,40 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
             .where(and(eq(products.variantGroup, p.variantGroup), eq(products.isActive, true)))
             .orderBy(asc(products.pricePaise))
         : Promise.resolve([]),
+      // everything else listed in this product's category (not itself or its pack-size siblings)
       p.categoryId
         ? db
-            .select({ p: products, brandName: brands.name })
+            .select({ p: products, brandName: brands.name, brandSlug: brands.slug, brandLogo: brands.logoUrl })
             .from(products)
             .leftJoin(brands, eq(brands.id, products.brandId))
             .where(
               and(
-                eq(products.categoryId, p.categoryId),
+                inCategories(db, [p.categoryId]),
                 ne(products.id, p.id),
                 eq(products.isActive, true),
                 p.variantGroup ? or(sql`${products.variantGroup} is null`, ne(products.variantGroup, p.variantGroup)) : undefined,
               ),
             )
-            .orderBy(desc(products.isBestseller), desc(products.ratingCount))
-            .limit(10)
+            .limit(300)
         : Promise.resolve([]),
+      alsoBought(db, p, 6),
     ]);
+
+    // "Similar products": the nearest in price; "Top products in this category": the most popular of the rest.
+    const gap = (r: CardRow) => Math.abs(r.p.pricePaise - p.pricePaise);
+    const similar = [...sameCategory].sort((a, b) => gap(a) - gap(b) || byPopularity(a, b)).slice(0, 9);
+    const shown = new Set(similar.map((r) => r.p.id));
+    const top = sameCategory.filter((r) => !shown.has(r.p.id)).sort(byPopularity).slice(0, 9);
+
+    // "Brands in this category", most products first (this product's brand counts too)
+    const brandCount = new Map<string, { slug: string; name: string; logoUrl: string | null; count: number }>();
+    for (const r of [...sameCategory, { brandSlug: row.brandSlug, brandName: row.brandName, brandLogo: null }]) {
+      if (!r.brandSlug || !r.brandName) continue;
+      const b = brandCount.get(r.brandSlug) ?? { slug: r.brandSlug, name: r.brandName, logoUrl: r.brandLogo ?? null, count: 0 };
+      b.count++;
+      if (!b.logoUrl && r.brandLogo) b.logoUrl = r.brandLogo;
+      brandCount.set(r.brandSlug, b);
+    }
 
     return {
       ...productCard(p, row.brandName ? { name: row.brandName } : null),
@@ -398,7 +479,13 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
         inStock: v.stockQty > 0,
         selected: v.id === p.id,
       })),
-      related: related.map((r) => productCard(r.p, r.brandName ? { name: r.brandName } : null)),
+      /** "Similar products": same category, nearest in price */
+      related: similar.map(card),
+      /** "Top products in this category": the most popular of the category's other products */
+      topInCategory: top.map(card),
+      /** "People also bought" */
+      alsoBought: bought.map(card),
+      brandsInCategory: [...brandCount.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
     };
   });
 }

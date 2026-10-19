@@ -411,7 +411,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
   app.get('/v1/products/:slug', async (req) => {
     const { slug } = parse(z.object({ slug: z.string().min(1).max(200) }), req.params);
     const [row] = await db
-      .select({ p: products, brandName: brands.name, brandSlug: brands.slug, categorySlug: categories.slug, categoryName: categories.name })
+      .select({ p: products, brandName: brands.name, brandSlug: brands.slug, brandLogo: brands.logoUrl, categorySlug: categories.slug, categoryName: categories.name })
       .from(products)
       .leftJoin(brands, eq(brands.id, products.brandId))
       .leftJoin(categories, eq(categories.id, products.categoryId))
@@ -454,7 +454,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
 
     // "Brands in this category", most products first (this product's brand counts too)
     const brandCount = new Map<string, { slug: string; name: string; logoUrl: string | null; count: number }>();
-    for (const r of [...sameCategory, { brandSlug: row.brandSlug, brandName: row.brandName, brandLogo: null }]) {
+    for (const r of [...sameCategory, { brandSlug: row.brandSlug, brandName: row.brandName, brandLogo: row.brandLogo }]) {
       if (!r.brandSlug || !r.brandName) continue;
       const b = brandCount.get(r.brandSlug) ?? { slug: r.brandSlug, name: r.brandName, logoUrl: r.brandLogo ?? null, count: 0 };
       b.count++;
@@ -466,6 +466,8 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
       ...productCard(p, row.brandName ? { name: row.brandName } : null),
       /** for the brand page (`?brand=` on the product list) */
       brandSlug: row.brandSlug,
+      /** the brand's logo (set from Wall2Roof), for the "Explore all products" row */
+      brandLogoUrl: row.brandLogo,
       images: p.images,
       description: htmlToText(p.description),
       specs: p.specs,

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { eq } from 'drizzle-orm';
 
 import { buildApp } from '../src/app.js';
 import { openDb, type DbHandle } from '../src/db/client.js';
@@ -100,12 +101,19 @@ describe('product page sections', () => {
     expect(d.related.concat(d.topInCategory).some((p: any) => p.sku === 'W0')).toBe(false);
   });
 
-  it('lists the brands in the category, most products first', async () => {
-    const d = await detail('w0');
+  it('lists the brands in the category, most products first, with their logos', async () => {
+    let d = await detail('w0');
     expect(d.brandsInCategory.map((b: any) => [b.slug, b.count])).toEqual([
       ['havells', 8],
       ['finolex', 4],
     ]);
+
+    // a logo set from Wall2Roof (brands.logo_url) shows on the product and in the brands row
+    await h.db.update(brands).set({ logoUrl: 'https://example.com/finolex.png' }).where(eq(brands.slug, 'finolex'));
+    d = await detail('w0');
+    expect(d.brandLogoUrl).toBe('https://example.com/finolex.png');
+    expect(d.brandsInCategory.find((b: any) => b.slug === 'finolex').logoUrl).toBe('https://example.com/finolex.png');
+    expect(d.brandsInCategory.find((b: any) => b.slug === 'havells').logoUrl).toBeNull();
   });
 
   it('puts products bought together first in "People also bought", then bestsellers from other categories', async () => {

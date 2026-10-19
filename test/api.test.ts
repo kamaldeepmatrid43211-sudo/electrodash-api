@@ -96,7 +96,7 @@ describe('catalogue', () => {
     expect(search.body.items.map((p: any) => p.sku)).toEqual(['B1']);
 
     const detail = await call('GET', '/v1/products/bulb');
-    expect(detail.body).toMatchObject({ sku: 'B1', discountPct: 34, brand: 'Philips', brandSlug: 'philips' });
+    expect(detail.body).toMatchObject({ sku: 'B1', discountPct: 34, brand: 'Philips', brandSlug: 'philips', brandLogoUrl: null });
     expect((await call('GET', '/v1/products/nope')).status).toBe(404);
   });
 

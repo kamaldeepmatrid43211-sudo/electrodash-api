@@ -24,6 +24,13 @@ export type StoreSettings = FeeSettings & {
    * and the code for ANY number is filled in by the app. Never with real customers.
    */
   testLogin: boolean;
+  /**
+   * The newest installable app (APK) and where to download it. Apps older than this version show
+   * "New version available — Download". Empty = no message. Small changes reach phones as
+   * over-the-air updates instead; this is only for changes that need a new APK.
+   */
+  latestAppVersion: string;
+  latestAppUrl: string;
 };
 
 export const DEFAULT_SETTINGS: StoreSettings = {
@@ -40,6 +47,8 @@ export const DEFAULT_SETTINGS: StoreSettings = {
   codEnabled: true,
   onlinePaymentsEnabled: false,
   testLogin: false,
+  latestAppVersion: '',
+  latestAppUrl: '',
 };
 
 export async function getSettings(db: Db): Promise<StoreSettings> {

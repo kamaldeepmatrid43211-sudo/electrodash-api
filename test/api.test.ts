@@ -130,6 +130,17 @@ describe('catalogue', () => {
     expect((await call('GET', '/v1/config')).body.deliveryEtaText).toBe('12 minutes');
   });
 
+  it('tells older apps about a newer APK only when both version and an https link are set', async () => {
+    expect((await call('GET', '/v1/config')).body.latestApp).toBeNull();
+    await setSetting(h.db, 'latestAppVersion', '1.1.0');
+    expect((await call('GET', '/v1/config')).body.latestApp).toBeNull(); // no link yet
+    await setSetting(h.db, 'latestAppUrl', 'http://example.com/app.apk');
+    expect((await call('GET', '/v1/config')).body.latestApp).toBeNull(); // not https
+    await setSetting(h.db, 'latestAppUrl', 'https://expo.dev/artifacts/eas/x.apk');
+    expect((await call('GET', '/v1/config')).body.latestApp).toEqual({ version: '1.1.0', url: 'https://expo.dev/artifacts/eas/x.apk' });
+    await setSetting(h.db, 'latestAppVersion', '');
+  });
+
   it('shows live home banners in order, and drops links to hidden things', async () => {
     const img = (n: number) => `https://admin.example.com/uploads/electrodash/banners/b${n}.jpg`;
     const hour = 3_600_000;

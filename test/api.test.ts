@@ -93,7 +93,9 @@ describe('catalogue', () => {
     expect(list.body.facets.brands).toEqual([{ slug: 'philips', name: 'Philips', count: 3 }]);
 
     const search = await call('GET', '/v1/products?q=led%20bulb');
-    expect(search.body.items.map((p: any) => p.sku)).toEqual(['B1']);
+    // the bulb named 'LED Bulb' first; the rest of the 'LED Bulbs' category after it
+    expect(search.body.items.map((p: any) => p.sku)[0]).toBe('B1');
+    expect(search.body.total).toBe(3);
 
     const detail = await call('GET', '/v1/products/bulb');
     expect(detail.body).toMatchObject({ sku: 'B1', discountPct: 34, brand: 'Philips', brandSlug: 'philips', brandLogoUrl: null });

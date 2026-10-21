@@ -149,17 +149,32 @@ async function categoryIdsFor(db: Db, slug: string): Promise<number[]> {
   return ids;
 }
 
+/**
+ * The searched words, each cut to a simple stem so plurals still match: "lights" → "light",
+ * "switches" → "switch", "bulbs" → "bulb" ("glass" stays "glass").
+ */
+export function searchStems(q: string): string[] {
+  return q
+    .toLowerCase()
+    .replace(/[%_]/g, '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 6)
+    .map((w) => (w.endsWith('ss') ? w : w.length > 4 && w.endsWith('es') ? w.slice(0, -2) : w.length > 3 && w.endsWith('s') ? w.slice(0, -1) : w));
+}
+
 function searchCondition(q: string): SQL {
-  const words = q.split(/\s+/).filter(Boolean).slice(0, 6);
-  // Every word must match name, subtitle, SKU or brand (prefix-friendly ILIKE).
+  // Every word must match the name, subtitle, SKU, brand — or one of the product's categories, so
+  // searching a category ("hanging lights") finds its products, like Blinkit.
   return and(
-    ...words.map((w) => {
-      const like = `%${w.replace(/[%_]/g, '')}%`;
+    ...searchStems(q).map((w) => {
+      const like = `%${w}%`;
       return or(
         ilike(products.name, like),
         ilike(products.subtitle, like),
         ilike(products.sku, like),
         ilike(brands.name, like),
+        sql`exists (select 1 from categories c where c.name ilike ${like} and (c.id = ${products.categoryId} or c.id in (select pc.category_id from product_categories pc where pc.product_id = ${products.id})))`,
       )!;
     }),
   )!;
@@ -304,7 +319,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
     const conds: SQL[] = [eq(products.isActive, true)];
     if (q.category) {
       const ids = await categoryIdsFor(db, q.category);
-      if (!ids.length) return { items: [], total: 0, page: q.page, pages: 0, facets: { brands: [], prices: [], specs: [] } };
+      if (!ids.length) return { items: [], total: 0, page: q.page, pages: 0, facets: { brands: [], prices: [], specs: [], categories: [] } };
       conds.push(inCategories(db, ids));
     }
     if (q.q) conds.push(searchCondition(q.q));
@@ -316,11 +331,28 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
     // everything the category/search allows; the page itself is then fetched by id.
     const picked = parsePicked(q);
     const pool = await db
-      .select({ id: products.id, pricePaise: products.pricePaise, specs: products.specs, brandSlug: brands.slug, brandName: brands.name })
+      .select({ id: products.id, pricePaise: products.pricePaise, specs: products.specs, brandSlug: brands.slug, brandName: brands.name, categoryId: products.categoryId })
       .from(products)
       .leftJoin(brands, eq(brands.id, products.brandId))
       .where(and(...conds));
-    const { ids, facets } = facetAndFilter(pool, picked);
+    const { ids, facets: found } = facetAndFilter(pool, picked);
+    // Searches: the categories the matching products are in, most first (Blinkit's tiles above results).
+    let searchCats: { slug: string; name: string; imageUrl: string | null; count: number }[] = [];
+    if (q.q && !q.category) {
+      const counts = new Map<number, number>();
+      for (const r of pool) if (r.categoryId != null) counts.set(r.categoryId, (counts.get(r.categoryId) ?? 0) + 1);
+      if (counts.size > 1) {
+        const rows = await db
+          .select({ id: categories.id, slug: categories.slug, name: categories.name, imageUrl: categories.imageUrl })
+          .from(categories)
+          .where(and(inArray(categories.id, [...counts.keys()]), eq(categories.isActive, true)));
+        searchCats = rows
+          .map((c) => ({ slug: c.slug, name: c.name, imageUrl: c.imageUrl, count: counts.get(c.id) ?? 0 }))
+          .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+          .slice(0, 10);
+      }
+    }
+    const facets = { ...found, categories: searchCats };
     const filtering = isFiltering(picked);
     const count = filtering ? ids.length : pool.length;
     if (filtering) {
@@ -341,6 +373,11 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
               : q.sort === 'newest'
                 ? [desc(products.createdAt)]
                 : [desc(sql`${products.stockQty} > 0`), desc(products.isBestseller), desc(products.ratingCount)];
+    // Searching: products whose own name has every word come first, then ones found by category/brand.
+    if (q.q && q.sort === 'relevance') {
+      const stems = searchStems(q.q);
+      if (stems.length) order.unshift(desc(sql`(${and(...stems.map((w) => ilike(products.name, `%${w}%`)))})`));
+    }
 
     const rows = await db
       .select({ p: products, brandName: brands.name })
@@ -373,7 +410,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
       db
         .select({ slug: categories.slug, name: categories.name })
         .from(categories)
-        .where(and(eq(categories.isActive, true), ilike(categories.name, `%${q.replace(/[%_]/g, '')}%`)))
+        .where(and(eq(categories.isActive, true), ...searchStems(q).map((w) => ilike(categories.name, `%${w}%`))))
         .limit(3),
     ]);
     return {
